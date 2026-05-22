@@ -1,6 +1,6 @@
 import { execSync } from 'child_process';
 import path from 'path';
-import { existsSync } from 'fs';
+import { existsSync, rmSync } from 'fs';
 
 export function getRepoRoot(): string {
   try {
@@ -55,8 +55,8 @@ export function removeWorktree(repoRoot: string, worktreeDir: string, branch: st
     try {
       execSync(`git -C "${repoRoot}" worktree remove "${worktreeDir}" --force`, { stdio: 'inherit' });
     } catch {
-      // If git worktree remove fails, force delete
-      execSync(`rm -rf "${worktreeDir}"`, { stdio: 'pipe' });
+      // If git worktree remove fails, force delete using cross-platform Node.js API
+      rmSync(worktreeDir, { recursive: true, force: true });
     }
   }
 

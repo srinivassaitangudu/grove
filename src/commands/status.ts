@@ -3,7 +3,7 @@ import { existsSync } from 'fs';
 import { getRepoRoot } from '../lib/worktree.js';
 import { readConfig } from '../lib/config.js';
 import { readState } from '../lib/state.js';
-import { isPortInUse } from '../lib/process.js';
+import { getProcessStatus } from '../lib/process.js';
 
 export function statusCommand(): void {
   const repoRoot = getRepoRoot();
@@ -25,18 +25,20 @@ export function statusCommand(): void {
 
   for (const id of agentIds) {
     const agent = state.agents[id];
-    let status: string;
+    let statusText: string;
+
+    const status = getProcessStatus(agent.base_port, agent.pids);
 
     if (!existsSync(agent.path)) {
-      status = chalk.red('orphaned');
-    } else if (isPortInUse(agent.base_port)) {
-      status = chalk.green('running');
+      statusText = chalk.red('orphaned');
+    } else if (status === 'running') {
+      statusText = chalk.green('running');
     } else {
-      status = chalk.yellow('stopped');
+      statusText = chalk.yellow('stopped');
     }
 
     console.log(
-      `${id.padEnd(20)} ${agent.branch.padEnd(15)} ${String(agent.base_port).padEnd(8)} ${status.padEnd(19)} ${chalk.gray(agent.path)}`
+      `${id.padEnd(20)} ${agent.branch.padEnd(15)} ${String(agent.base_port).padEnd(8)} ${statusText.padEnd(19)} ${chalk.gray(agent.path)}`
     );
   }
 

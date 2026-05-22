@@ -2,11 +2,13 @@ import chalk from 'chalk';
 import { execSync } from 'child_process';
 import { existsSync, mkdirSync } from 'fs';
 import path from 'path';
+import process from 'process';
 import { getRepoRoot, getRepoName, getWorktreeDir, createWorktree } from '../lib/worktree.js';
 import { readConfig } from '../lib/config.js';
 import { readState, addAgent, getAgent } from '../lib/state.js';
 import { computePortBlock } from '../lib/ports.js';
 import { generateEnvFiles } from '../lib/env.js';
+import { spawnBackground } from '../lib/process.js';
 
 export function startCommand(name: string | undefined, feature: string | undefined): void {
   const repoRoot = getRepoRoot();
@@ -69,8 +71,6 @@ export function startCommand(name: string | undefined, feature: string | undefin
       if (existsSync(serviceDir) && !existsSync(nodeModulesPath)) {
         console.log(chalk.gray(`📦 Installing dependencies (${service.name})...`));
         try {
-          const logDir = path.join(repoRoot, '.grove', 'logs');
-          mkdirSync(logDir, { recursive: true });
           execSync(service.install_cmd, {
             cwd: serviceDir,
             stdio: 'pipe',
@@ -83,6 +83,27 @@ export function startCommand(name: string | undefined, feature: string | undefin
     }
   }
 
+  // Launch services in background
+  const pids: number[] = [];
+  const logDir = path.join(repoRoot, '.grove', 'logs');
+  mkdirSync(logDir, { recursive: true });
+
+  console.log(chalk.gray(`📡 Launching services...`));
+  for (const service of config.services) {
+    if (service.managed === false) continue;
+    
+    const serviceDir = path.join(worktreeDir, service.dir);
+    const serviceLogFile = path.join(logDir, `${agentId}-${service.name}.log`);
+    
+    try {
+      const pid = spawnBackground(service.start_cmd, serviceDir, serviceLogFile);
+      pids.push(pid);
+      console.log(chalk.gray(`   ✔ ${service.name} (pid: ${pid})`));
+    } catch (err) {
+      console.log(chalk.red(`❌ Failed to start ${service.name}`));
+    }
+  }
+
   // Save to state
   addAgent(repoRoot, {
     id: agentId,
@@ -92,6 +113,7 @@ export function startCommand(name: string | undefined, feature: string | undefin
     repo: repoName,
     base_port: basePort,
     created_at: new Date().toISOString(),
+    pids,
   });
 
   // Print summary
@@ -102,9 +124,10 @@ export function startCommand(name: string | undefined, feature: string | undefin
   console.log(`🌿 Branch  : ${branch}`);
   console.log(`🔌 Port    : ${basePort}`);
   console.log(`📂 Path    : ${worktreeDir}`);
+  console.log(`📝 Logs    : grove logs ${agentId}`);
   console.log(chalk.gray('----------------------------------'));
   console.log('');
   console.log('👉 Next steps:');
-  console.log(chalk.cyan(`   cd ${worktreeDir}`));
-  console.log(chalk.cyan(`   ${config.services[0]?.start_cmd || 'npm run dev'}`));
+  console.log(chalk.cyan(`   grove status`));
+  console.log(chalk.cyan(`   grove run ${agentId} "your prompt"`));
 }

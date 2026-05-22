@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import process from 'process';
 import { getRepoRoot } from '../lib/worktree.js';
 import { readConfig } from '../lib/config.js';
 import { getAgent, removeAgent } from '../lib/state.js';
@@ -15,6 +16,7 @@ export function removeCommand(name: string): void {
   if (!agent) {
     console.log(chalk.red(`❌ Agent '${name}' not found`));
     process.exit(1);
+    return;
   }
 
   // Stop any running processes (only managed services)

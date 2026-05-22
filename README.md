@@ -14,7 +14,7 @@ npm install && npm run build && npm link
 # In any git repo:
 grove init                          # detect project, create config
 grove start gallery "map feature"   # create isolated worktree
-cd ../yourrepo-gallery && npm run dev   # runs on its own port
+cd ../yourrepo-gallery && npm run dev   # runs on its own portgmein
 ```
 
 ## What it does

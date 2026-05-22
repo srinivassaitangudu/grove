@@ -9,6 +9,7 @@ export interface AgentEntry {
   repo: string;
   base_port: number;
   created_at: string;
+  pids?: number[];
 }
 
 export interface GroveState {
