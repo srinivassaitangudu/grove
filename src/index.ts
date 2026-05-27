@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import { initCommand } from './commands/init.js';
 import { startCommand } from './commands/start.js';
 import { stopCommand, stopAllCommand } from './commands/stop.js';
+import { restartCommand } from './commands/restart.js';
 import { statusCommand } from './commands/status.js';
 import { logsCommand } from './commands/logs.js';
 import { removeCommand } from './commands/remove.js';
@@ -35,6 +36,11 @@ program
   .command('stop-all')
   .description('Stop all running agent processes')
   .action(() => stopAllCommand());
+
+program
+  .command('restart <name>')
+  .description('Restart an existing agent (stop then start)')
+  .action((name: string) => restartCommand(name));
 
 program
   .command('status')

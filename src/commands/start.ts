@@ -4,11 +4,35 @@ import { existsSync, mkdirSync } from 'fs';
 import path from 'path';
 import process from 'process';
 import { getRepoRoot, getRepoName, getWorktreeDir, createWorktree } from '../lib/worktree.js';
-import { readConfig } from '../lib/config.js';
+import { GroveConfig, readConfig } from '../lib/config.js';
 import { readState, addAgent, getAgent } from '../lib/state.js';
 import { computePortBlock } from '../lib/ports.js';
 import { generateEnvFiles } from '../lib/env.js';
-import { spawnBackground } from '../lib/process.js';
+import { spawnBackground, getProcessStatus } from '../lib/process.js';
+
+export function launchServices(agentId: string, worktreeDir: string, config: GroveConfig): number[] {
+  const pids: number[] = [];
+  const repoRoot = getRepoRoot();
+  const logDir = path.join(repoRoot, '.grove', 'logs');
+  mkdirSync(logDir, { recursive: true });
+
+  console.log(chalk.gray(`📡 Launching services...`));
+  for (const service of config.services) {
+    if (service.managed === false) continue;
+    
+    const serviceDir = path.join(worktreeDir, service.dir);
+    const serviceLogFile = path.join(logDir, `${agentId}-${service.name}.log`);
+    
+    try {
+      const pid = spawnBackground(service.start_cmd, serviceDir, serviceLogFile);
+      pids.push(pid);
+      console.log(chalk.gray(`   ✔ ${service.name} (pid: ${pid})`));
+    } catch (err) {
+      console.log(chalk.red(`❌ Failed to start ${service.name}`));
+    }
+  }
+  return pids;
+}
 
 export function startCommand(name: string | undefined, feature: string | undefined): void {
   const repoRoot = getRepoRoot();
@@ -24,21 +48,65 @@ export function startCommand(name: string | undefined, feature: string | undefin
     process.exit(1);
   }
 
-  // Check if already exists
-  const existing = getAgent(repoRoot, agentId);
-  if (existing) {
-    const worktreeDir = existing.path;
-    if (existsSync(worktreeDir)) {
-      console.log('');
-      console.log(chalk.yellow(`⚠️  '${agentId}' already exists`));
-      console.log(`📂 Path: ${worktreeDir}`);
-      console.log(`👉 Use ${chalk.cyan(`grove remove ${agentId}`)} first to recreate.`);
+  const basePort = computePortBlock(agentId, config.port_range_start, config.port_block_size);
+  const worktreeDir = getWorktreeDir(repoRoot, agentId);
+  const branch = agentId;
+
+  // Check if already exists in state
+  let agent = getAgent(repoRoot, agentId);
+  const dirExists = existsSync(worktreeDir);
+
+  if (agent || dirExists) {
+    if (dirExists) {
+      // It exists on disk - check if it's already running
+      const ports = config.services
+        .filter(s => s.managed !== false)
+        .map(s => basePort + s.port_offset);
+      const status = getProcessStatus(ports, agent?.pids);
+
+      if (status === 'running') {
+        console.log('');
+        console.log(chalk.yellow(`⚠️  '${agentId}' is already running`));
+        console.log(`📂 Path: ${worktreeDir}`);
+        console.log(`🔌 Port: ${basePort}`);
+        console.log(`👉 Use ${chalk.cyan(`grove status`)} to check details.`);
+        return;
+      }
+
+      // If stopped, relaunch
+      console.log(chalk.blue(`🔄 Relaunching: ${agentId}`));
+      
+      // Re-generate env files (config might have changed)
+      generateEnvFiles(worktreeDir, basePort, agentId, config);
+
+      // Check/Install dependencies
+      installDependencies(worktreeDir, config);
+
+      // Launch services
+      const pids = launchServices(agentId, worktreeDir, config);
+      
+      // Update/Create state entry
+      const now = new Date().toISOString();
+      agent = {
+        id: agentId,
+        branch,
+        path: worktreeDir,
+        feature: feature || agent?.feature || '',
+        repo: repoName,
+        base_port: basePort,
+        created_at: agent?.created_at || now,
+        pids,
+      };
+      addAgent(repoRoot, agent);
+
+      printSummary(agentId, branch, basePort, worktreeDir);
       return;
+    } else {
+      // Stale entry in state — clean it up silently and proceed to create
     }
-    // Stale entry — clean it up silently
   }
 
-  // Check how many agents are running
+  // New Agent flow
   const state = readState(repoRoot);
   const agentCount = Object.keys(state.agents).length;
   if (agentCount > 0) {
@@ -47,12 +115,6 @@ export function startCommand(name: string | undefined, feature: string | undefin
 
   console.log('');
   console.log(chalk.blue(`🚀 Starting: ${agentId}`));
-
-  // Compute deterministic port
-  const basePort = computePortBlock(agentId, config.port_range_start, config.port_block_size);
-  const worktreeDir = getWorktreeDir(repoRoot, agentId);
-  const branch = agentId;
-
   console.log(chalk.gray(`🔌 Assigned Port: ${basePort}`));
 
   // Create worktree
@@ -61,7 +123,29 @@ export function startCommand(name: string | undefined, feature: string | undefin
   // Generate env files
   generateEnvFiles(worktreeDir, basePort, agentId, config);
 
-  // Install dependencies (only managed services)
+  // Install dependencies
+  installDependencies(worktreeDir, config);
+
+  // Launch services
+  const pids = launchServices(agentId, worktreeDir, config);
+
+  // Save to state
+  agent = {
+    id: agentId,
+    branch,
+    path: worktreeDir,
+    feature: feature || '',
+    repo: repoName,
+    base_port: basePort,
+    created_at: new Date().toISOString(),
+    pids,
+  };
+  addAgent(repoRoot, agent);
+
+  printSummary(agentId, branch, basePort, worktreeDir);
+}
+
+function installDependencies(worktreeDir: string, config: GroveConfig): void {
   for (const service of config.services) {
     if (service.managed === false) continue;
     if (service.install_cmd) {
@@ -82,41 +166,9 @@ export function startCommand(name: string | undefined, feature: string | undefin
       }
     }
   }
+}
 
-  // Launch services in background
-  const pids: number[] = [];
-  const logDir = path.join(repoRoot, '.grove', 'logs');
-  mkdirSync(logDir, { recursive: true });
-
-  console.log(chalk.gray(`📡 Launching services...`));
-  for (const service of config.services) {
-    if (service.managed === false) continue;
-    
-    const serviceDir = path.join(worktreeDir, service.dir);
-    const serviceLogFile = path.join(logDir, `${agentId}-${service.name}.log`);
-    
-    try {
-      const pid = spawnBackground(service.start_cmd, serviceDir, serviceLogFile);
-      pids.push(pid);
-      console.log(chalk.gray(`   ✔ ${service.name} (pid: ${pid})`));
-    } catch (err) {
-      console.log(chalk.red(`❌ Failed to start ${service.name}`));
-    }
-  }
-
-  // Save to state
-  addAgent(repoRoot, {
-    id: agentId,
-    branch,
-    path: worktreeDir,
-    feature: feature || '',
-    repo: repoName,
-    base_port: basePort,
-    created_at: new Date().toISOString(),
-    pids,
-  });
-
-  // Print summary
+function printSummary(agentId: string, branch: string, basePort: number, worktreeDir: string): void {
   console.log('');
   console.log(chalk.green('✅ Ready'));
   console.log(chalk.gray('----------------------------------'));

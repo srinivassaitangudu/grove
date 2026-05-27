@@ -5,6 +5,7 @@ import { getRepoRoot } from '../lib/worktree.js';
 import { readConfig } from '../lib/config.js';
 import { getAgent } from '../lib/state.js';
 import { startCommand } from './start.js';
+import { getProcessStatus } from '../lib/process.js';
 
 export function runCommand(name: string, prompt: string | undefined, options: { ai?: string }): void {
   const repoRoot = getRepoRoot();
@@ -20,6 +21,23 @@ export function runCommand(name: string, prompt: string | undefined, options: { 
       console.log(chalk.red('❌ Failed to create worktree'));
       process.exit(1);
     }
+  } else {
+    // If agent exists, check if it's running
+    const ports = config.services
+      .filter(s => s.managed !== false)
+      .map(s => agent!.base_port + s.port_offset);
+    const status = getProcessStatus(ports, agent.pids);
+
+    if (status !== 'running') {
+      console.log(chalk.yellow(`⚠️  Services are not running for agent '${name}'`));
+      startCommand(name, undefined);
+      agent = getAgent(repoRoot, name);
+    }
+  }
+
+  if (!agent) {
+    console.log(chalk.red(`❌ Agent '${name}' not found or failed to start.`));
+    process.exit(1);
   }
 
   if (!existsSync(agent.path)) {

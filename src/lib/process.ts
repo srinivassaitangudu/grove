@@ -36,7 +36,7 @@ export function killPid(pid: number): boolean {
       execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
     } else {
       try {
-        process.kill(pid, 'SIGTERM');
+        process.kill(pid, 'SIGKILL');
       } catch {
         // Already dead
       }
@@ -77,12 +77,27 @@ export function killPort(port: number): boolean {
   }
 }
 
-export function getProcessStatus(port: number, pids?: number[]): 'running' | 'stopped' {
+export function getProcessStatus(ports: number[], pids?: number[]): 'running' | 'stopped' {
+  // 1. Check if any of the expected ports are in use
+  // This is the most reliable check for "is the service alive?"
+  for (const port of ports) {
+    if (isPortInUse(port)) return 'running';
+  }
+
+  // 2. Check PIDs as a secondary signal
+  // On Windows, PID reuse is common, so we only trust it if we have no ports to check
+  // or if we're willing to accept a potential false positive during startup.
   if (pids && pids.length > 0) {
     const anyRunning = pids.some(pid => isPidRunning(pid));
-    if (anyRunning) return 'running';
+    
+    // If we have ports and NONE are in use, but a PID is "running",
+    // it's likely a stale PID/reused PID, especially on Windows.
+    // However, if we JUST started (within a few seconds), it might be valid.
+    // For now, if we have ports, we trust the port status.
+    if (ports.length === 0 && anyRunning) return 'running';
   }
-  return isPortInUse(port) ? 'running' : 'stopped';
+
+  return 'stopped';
 }
 
 export function spawnBackground(

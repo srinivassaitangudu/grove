@@ -27,7 +27,12 @@ export function statusCommand(): void {
     const agent = state.agents[id];
     let statusText: string;
 
-    const status = getProcessStatus(agent.base_port, agent.pids);
+    // Check all configured service ports
+    const ports = config.services
+      .filter(s => s.managed !== false)
+      .map(s => agent.base_port + s.port_offset);
+    
+    const status = getProcessStatus(ports, agent.pids);
 
     if (!existsSync(agent.path)) {
       statusText = chalk.red('orphaned');
