@@ -7,14 +7,17 @@ import { getRepoRoot, getRepoName, getWorktreeDir, createWorktree } from '../lib
 import { GroveConfig, readConfig } from '../lib/config.js';
 import { readState, addAgent, getAgent } from '../lib/state.js';
 import { computePortBlock } from '../lib/ports.js';
-import { generateEnvFiles } from '../lib/env.js';
+import { generateEnvFiles, buildServicePortMap } from '../lib/env.js';
 import { spawnBackground, getProcessStatus } from '../lib/process.js';
+import { resolveTemplate, TemplateVars } from '../lib/templates.js';
 
-export function launchServices(agentId: string, worktreeDir: string, config: GroveConfig): number[] {
+export function launchServices(agentId: string, worktreeDir: string, config: GroveConfig, basePort: number): number[] {
   const pids: number[] = [];
   const repoRoot = getRepoRoot();
   const logDir = path.join(repoRoot, '.grove', 'logs');
   mkdirSync(logDir, { recursive: true });
+
+  const serviceMap = buildServicePortMap(basePort, config);
 
   console.log(chalk.gray(`📡 Launching services...`));
   for (const service of config.services) {
@@ -23,8 +26,18 @@ export function launchServices(agentId: string, worktreeDir: string, config: Gro
     const serviceDir = path.join(worktreeDir, service.dir);
     const serviceLogFile = path.join(logDir, `${agentId}-${service.name}.log`);
     
+    const servicePort = basePort + service.port_offset;
+    const vars: TemplateVars = {
+      port: servicePort,
+      agent_name: agentId,
+      base_port: basePort,
+      services: serviceMap,
+    };
+
+    const resolvedCmd = resolveTemplate(service.start_cmd, vars);
+    
     try {
-      const pid = spawnBackground(service.start_cmd, serviceDir, serviceLogFile);
+      const pid = spawnBackground(resolvedCmd, serviceDir, serviceLogFile);
       pids.push(pid);
       console.log(chalk.gray(`   ✔ ${service.name} (pid: ${pid})`));
     } catch (err) {
@@ -83,7 +96,7 @@ export function startCommand(name: string | undefined, feature: string | undefin
       installDependencies(worktreeDir, config);
 
       // Launch services
-      const pids = launchServices(agentId, worktreeDir, config);
+      const pids = launchServices(agentId, worktreeDir, config, basePort);
       
       // Update/Create state entry
       const now = new Date().toISOString();
@@ -127,7 +140,7 @@ export function startCommand(name: string | undefined, feature: string | undefin
   installDependencies(worktreeDir, config);
 
   // Launch services
-  const pids = launchServices(agentId, worktreeDir, config);
+  const pids = launchServices(agentId, worktreeDir, config, basePort);
 
   // Save to state
   agent = {
