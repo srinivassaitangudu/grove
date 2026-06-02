@@ -8,31 +8,43 @@ import { startCommand } from './start.js';
 import { getProcessStatus } from '../lib/process.js';
 
 export function runCommand(name: string, prompt: string | undefined, options: { ai?: string }): void {
-  const repoRoot = getRepoRoot();
-  const config = readConfig(repoRoot);
+  // Try to find existing agent first
+  let agent = getAgent(name);
+  
+  let repoRoot: string | undefined;
+  try {
+    repoRoot = getRepoRoot();
+  } catch {
+    // Not in a repo
+  }
 
-  // If agent doesn't exist, create it first
-  let agent = getAgent(repoRoot, name);
   if (!agent) {
+    if (!repoRoot) {
+      console.log(chalk.red(`❌ Agent '${name}' not found and not inside a git repository to create it.`));
+      process.exit(1);
+    }
     console.log(chalk.blue(`Creating worktree '${name}'...`));
     startCommand(name, prompt || undefined);
-    agent = getAgent(repoRoot, name);
+    agent = getAgent(name);
     if (!agent) {
       console.log(chalk.red('❌ Failed to create worktree'));
       process.exit(1);
     }
-  } else {
-    // If agent exists, check if it's running
-    const ports = config.services
-      .filter(s => s.managed !== false)
-      .map(s => agent!.base_port + s.port_offset);
-    const status = getProcessStatus(ports, agent.pids);
+  }
 
-    if (status !== 'running') {
-      console.log(chalk.yellow(`⚠️  Services are not running for agent '${name}'`));
-      startCommand(name, undefined);
-      agent = getAgent(repoRoot, name);
-    }
+  // Load config from the agent's repo root
+  const config = readConfig(agent.repo_root);
+
+  // If agent exists, check if it's running
+  const ports = config.services
+    .filter(s => s.managed !== false)
+    .map(s => agent!.base_port + s.port_offset);
+  const status = getProcessStatus(ports, agent.pids);
+
+  if (status !== 'running') {
+    console.log(chalk.yellow(`⚠️  Services are not running for agent '${name}'`));
+    startCommand(name, undefined);
+    agent = getAgent(name);
   }
 
   if (!agent) {

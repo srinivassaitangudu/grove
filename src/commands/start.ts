@@ -11,9 +11,8 @@ import { generateEnvFiles, buildServicePortMap } from '../lib/env.js';
 import { spawnBackground, getProcessStatus } from '../lib/process.js';
 import { resolveTemplate, TemplateVars } from '../lib/templates.js';
 
-export function launchServices(agentId: string, worktreeDir: string, config: GroveConfig, basePort: number): number[] {
+export function launchServices(agentId: string, worktreeDir: string, config: GroveConfig, basePort: number, repoRoot: string): number[] {
   const pids: number[] = [];
-  const repoRoot = getRepoRoot();
   const logDir = path.join(repoRoot, '.grove', 'logs');
   mkdirSync(logDir, { recursive: true });
 
@@ -48,7 +47,23 @@ export function launchServices(agentId: string, worktreeDir: string, config: Gro
 }
 
 export function startCommand(name: string | undefined, feature: string | undefined): void {
-  const repoRoot = getRepoRoot();
+  let repoRoot: string;
+  try {
+    repoRoot = getRepoRoot();
+  } catch (err) {
+    // If we're not in a repo, we MUST have an existing agent name to look up its repo_root
+    if (!name) {
+      console.log(chalk.red('❌ Not inside a git repository. Provide an agent name to restart an existing one.'));
+      process.exit(1);
+    }
+    const agent = getAgent(name);
+    if (!agent) {
+      console.log(chalk.red(`❌ Agent '${name}' not found and not inside a git repository to create it.`));
+      process.exit(1);
+    }
+    repoRoot = agent.repo_root;
+  }
+
   const config = readConfig(repoRoot);
   const repoName = getRepoName(repoRoot);
 
@@ -66,7 +81,7 @@ export function startCommand(name: string | undefined, feature: string | undefin
   const branch = agentId;
 
   // Check if already exists in state
-  let agent = getAgent(repoRoot, agentId);
+  let agent = getAgent(agentId);
   const dirExists = existsSync(worktreeDir);
 
   if (agent || dirExists) {
@@ -96,7 +111,7 @@ export function startCommand(name: string | undefined, feature: string | undefin
       installDependencies(worktreeDir, config);
 
       // Launch services
-      const pids = launchServices(agentId, worktreeDir, config, basePort);
+      const pids = launchServices(agentId, worktreeDir, config, basePort, repoRoot);
       
       // Update/Create state entry
       const now = new Date().toISOString();
@@ -106,11 +121,12 @@ export function startCommand(name: string | undefined, feature: string | undefin
         path: worktreeDir,
         feature: feature || agent?.feature || '',
         repo: repoName,
+        repo_root: repoRoot,
         base_port: basePort,
         created_at: agent?.created_at || now,
         pids,
       };
-      addAgent(repoRoot, agent);
+      addAgent(agent);
 
       printSummary(agentId, branch, basePort, worktreeDir);
       return;
@@ -120,7 +136,7 @@ export function startCommand(name: string | undefined, feature: string | undefin
   }
 
   // New Agent flow
-  const state = readState(repoRoot);
+  const state = readState();
   const agentCount = Object.keys(state.agents).length;
   if (agentCount > 0) {
     console.log(chalk.yellow(`⚠️  ${agentCount} agent(s) already exist`));
@@ -140,7 +156,7 @@ export function startCommand(name: string | undefined, feature: string | undefin
   installDependencies(worktreeDir, config);
 
   // Launch services
-  const pids = launchServices(agentId, worktreeDir, config, basePort);
+  const pids = launchServices(agentId, worktreeDir, config, basePort, repoRoot);
 
   // Save to state
   agent = {
@@ -149,11 +165,12 @@ export function startCommand(name: string | undefined, feature: string | undefin
     path: worktreeDir,
     feature: feature || '',
     repo: repoName,
+    repo_root: repoRoot,
     base_port: basePort,
     created_at: new Date().toISOString(),
     pids,
   };
-  addAgent(repoRoot, agent);
+  addAgent(agent);
 
   printSummary(agentId, branch, basePort, worktreeDir);
 }

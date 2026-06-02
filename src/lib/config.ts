@@ -45,6 +45,83 @@ interface LegacyConfig {
 
 const CONFIG_DIR = '.grove';
 const CONFIG_FILE = 'config.json';
+const README_FILE = 'README.md';
+
+const GROVE_README_CONTENT = `# Grove Project Metadata
+
+This folder contains Grove-specific configuration and runtime information for this project.
+
+## Project Structure
+
+- \`config.json\`: Project configuration (services, ports, AI commands).
+- \`logs/\`: Runtime logs for each active agent.
+- \`README.md\`: This reference guide.
+
+## Common Commands
+
+### Initialize Grove
+\`\`\`bash
+grove init
+\`\`\`
+
+### Create / Start Agent
+\`\`\`bash
+grove start <name> [feature]
+\`\`\`
+Example:
+\`\`\`bash
+grove start gallery "implement image gallery"
+\`\`\`
+Creates an isolated git worktree, assigns a dedicated port block, and launches services.
+
+### Run AI Prompt
+\`\`\`bash
+grove run <name> [prompt] [--ai <command>]
+\`\`\`
+Launches an AI coding assistant (e.g., Claude Code, Aider) directly inside the agent's worktree.
+
+**Key Features:**
+- **Auto-Start:** If the agent's services aren't running, \`grove run\` will start them automatically.
+- **Auto-Create:** If the agent doesn't exist, it will be created and started.
+- **AI Tooling:** Defaults to the \`ai_command\` in \`config.json\` (initially \`claude\`).
+- **Override:** Use \`--ai <command>\` to use a different tool (e.g., \`grove run my-agent --ai aider\`).
+
+### View Status
+\`\`\`bash
+grove status
+\`\`\`
+Lists all agents, their assigned ports, and current status (running, stopped, orphaned).
+
+### View Logs
+\`\`\`bash
+grove logs <name>
+\`\`\`
+Streams the logs for all services running under a specific agent.
+
+### Stop Agent
+\`\`\`bash
+grove stop <name>
+\`\`\`
+Kills the processes associated with the agent's port block.
+
+### Restart Agent
+\`\`\`bash
+grove restart <name>
+\`\`\`
+Stops and then starts the agent's services. Useful if the environment gets into a bad state.
+
+### Remove Agent
+\`\`\`bash
+grove remove <name>
+\`\`\`
+Stops services, deletes the git worktree directory, and removes the local branch.
+
+## Troubleshooting
+
+- **Service Connectivity:** If services can't talk to each other, ensure they use the environment variables provided by Grove (check \`.env.local\` in the worktree).
+- **Port Conflicts:** Grove uses a wide range of ports (defaulting to 54000+). Ensure these aren't blocked by your firewall.
+- **Stale State:** If \`grove status\` shows incorrect information, you may need to manually clean up orphaned processes or check \`~/.grove/state.json\`.
+`;
 
 export function getConfigDir(repoRoot: string): string {
   return path.join(repoRoot, CONFIG_DIR);
@@ -52,6 +129,10 @@ export function getConfigDir(repoRoot: string): string {
 
 export function getConfigPath(repoRoot: string): string {
   return path.join(repoRoot, CONFIG_DIR, CONFIG_FILE);
+}
+
+export function getREADMEPath(repoRoot: string): string {
+  return path.join(repoRoot, CONFIG_DIR, README_FILE);
 }
 
 export function configExists(repoRoot: string): boolean {
@@ -125,6 +206,11 @@ export function writeConfig(repoRoot: string, config: GroveConfig): void {
   }
   const configPath = getConfigPath(repoRoot);
   writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+}
+
+export function writeREADME(repoRoot: string): void {
+  const readmePath = getREADMEPath(repoRoot);
+  writeFileSync(readmePath, GROVE_README_CONTENT);
 }
 
 export function detectProjectType(repoRoot: string): Service[] {

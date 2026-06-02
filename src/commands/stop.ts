@@ -11,13 +11,19 @@ function getServicePorts(basePort: number, config: ReturnType<typeof readConfig>
 }
 
 export function stopCommand(name: string): void {
-  const repoRoot = getRepoRoot();
-  const config = readConfig(repoRoot);
-  const agent = getAgent(repoRoot, name);
+  const agent = getAgent(name);
 
   if (!agent) {
     console.log(chalk.red(`❌ Agent '${name}' not found`));
     process.exit(1);
+  }
+
+  // Load project-specific config to find ports
+  let config: ReturnType<typeof readConfig> | undefined;
+  try {
+    config = readConfig(agent.repo_root);
+  } catch {
+    // Repo might be deleted, will rely on PIDs
   }
 
   let stopped = 0;
@@ -32,12 +38,14 @@ export function stopCommand(name: string): void {
   }
 
   // Fallback to port-based killing for robustness
-  const ports = getServicePorts(agent.base_port, config);
-  for (const port of ports) {
-    if (isPortInUse(port)) {
-      console.log(chalk.gray(`🔪 Killing residual process on port ${port}...`));
-      if (killPort(port)) {
-        stopped++;
+  if (config) {
+    const ports = getServicePorts(agent.base_port, config);
+    for (const port of ports) {
+      if (isPortInUse(port)) {
+        console.log(chalk.gray(`🔪 Killing residual process on port ${port}...`));
+        if (killPort(port)) {
+          stopped++;
+        }
       }
     }
   }
@@ -50,9 +58,7 @@ export function stopCommand(name: string): void {
 }
 
 export function stopAllCommand(): void {
-  const repoRoot = getRepoRoot();
-  const config = readConfig(repoRoot);
-  const state = readState(repoRoot);
+  const state = readState();
   const agentIds = Object.keys(state.agents);
 
   if (agentIds.length === 0) {

@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import path from 'path';
+import os from 'os';
 
 export interface AgentEntry {
   id: string;
@@ -7,6 +8,7 @@ export interface AgentEntry {
   path: string;
   feature: string;
   repo: string;
+  repo_root: string; // Absolute path to the repository
   base_port: number;
   created_at: string;
   pids?: number[];
@@ -19,12 +21,16 @@ export interface GroveState {
 
 const STATE_FILE = 'state.json';
 
-export function getStatePath(repoRoot: string): string {
-  return path.join(repoRoot, '.grove', STATE_FILE);
+export function getGlobalGroveDir(): string {
+  return path.join(os.homedir(), '.grove');
 }
 
-export function ensureState(repoRoot: string): void {
-  const statePath = getStatePath(repoRoot);
+export function getStatePath(): string {
+  return path.join(getGlobalGroveDir(), STATE_FILE);
+}
+
+export function ensureState(): void {
+  const statePath = getStatePath();
   const dir = path.dirname(statePath);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
@@ -35,30 +41,30 @@ export function ensureState(repoRoot: string): void {
   }
 }
 
-export function readState(repoRoot: string): GroveState {
-  ensureState(repoRoot);
-  const raw = readFileSync(getStatePath(repoRoot), 'utf-8');
+export function readState(): GroveState {
+  ensureState();
+  const raw = readFileSync(getStatePath(), 'utf-8');
   return JSON.parse(raw) as GroveState;
 }
 
-export function writeState(repoRoot: string, state: GroveState): void {
-  ensureState(repoRoot);
-  writeFileSync(getStatePath(repoRoot), JSON.stringify(state, null, 2) + '\n');
+export function writeState(state: GroveState): void {
+  ensureState();
+  writeFileSync(getStatePath(), JSON.stringify(state, null, 2) + '\n');
 }
 
-export function getAgent(repoRoot: string, agentId: string): AgentEntry | undefined {
-  const state = readState(repoRoot);
+export function getAgent(agentId: string): AgentEntry | undefined {
+  const state = readState();
   return state.agents[agentId];
 }
 
-export function addAgent(repoRoot: string, agent: AgentEntry): void {
-  const state = readState(repoRoot);
+export function addAgent(agent: AgentEntry): void {
+  const state = readState();
   state.agents[agent.id] = agent;
-  writeState(repoRoot, state);
+  writeState(state);
 }
 
-export function removeAgent(repoRoot: string, agentId: string): void {
-  const state = readState(repoRoot);
+export function removeAgent(agentId: string): void {
+  const state = readState();
   delete state.agents[agentId];
-  writeState(repoRoot, state);
+  writeState(state);
 }

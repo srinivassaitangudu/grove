@@ -63,8 +63,8 @@ grove/
 │   │   ├── remove.ts     ← grove remove <name>
 │   │   └── run.ts        ← grove run <name> "prompt"
 │   └── lib/              ← shared utilities
-│       ├── config.ts     ← read/write .grove/config.json
-│       ├── state.ts      ← read/write .grove/state.json
+│       ├── config.ts     ← read project-specific .grove/config.json
+│       ├── state.ts      ← read/write global ~/.grove/state.json
 │       ├── ports.ts      ← SHA-256 hash → deterministic port
 │       ├── worktree.ts   ← git worktree operations
 │       ├── process.ts    ← lsof-based port checking/killing
@@ -73,13 +73,20 @@ grove/
 └── node_modules/         ← dependencies (gitignored)
 ```
 
+### Registry location
+
+Grove maintains its global state in the user's home directory:
+- Windows: `%USERPROFILE%\.grove\state.json`
+- macOS/Linux: `~/.grove/state.json`
+
+Project-specific configuration (`.grove/config.json`) remains in each repository.
+
 ### Per-repo structure (what grove creates in user repos)
 
 ```
 your-repo/
 ├── .grove/
 │   ├── config.json       ← service definitions, port config (committed)
-│   ├── state.json        ← runtime: which worktrees exist (gitignored)
 │   └── logs/             ← captured logs (gitignored)
 └── ...
 
@@ -101,7 +108,7 @@ Same name always gives same port. No registry needed.
 
 **Port block:** Each worktree gets a block of N ports (default 10). Service at index 0 gets base_port + 0, index 1 gets base_port + 1, etc.
 
-**State is minimal:** state.json only tracks what was created (worktree path, branch, ports). It does NOT track PIDs. Liveness is checked in real time via `lsof`.
+**State is minimal:** state.json tracks what was created across all projects (worktree path, branch, ports, and repo root). It does NOT track PIDs. Liveness is checked in real time via port usage and PIDs.
 
 **AI-agnostic:** The `run` command spawns any CLI in the worktree directory with `stdio: 'inherit'` (fully interactive). Claude, Gemini, Codex, Aider all work the same way.
 

@@ -9,16 +9,20 @@ import { readConfig } from '../lib/config.js';
 import { getAgent } from '../lib/state.js';
 
 export function logsCommand(name: string): void {
-  const repoRoot = getRepoRoot();
-  const config = readConfig(repoRoot);
-  const agent = getAgent(repoRoot, name);
+  const agent = getAgent(name);
 
   if (!agent) {
     console.log(chalk.red(`❌ Agent '${name}' not found`));
     process.exit(1);
   }
 
+  const repoRoot = agent.repo_root;
   const logDir = path.join(repoRoot, '.grove', 'logs');
+  
+  if (!existsSync(logDir)) {
+    console.log(chalk.gray(`ℹ️  No log directory found at ${logDir}`));
+    return;
+  }
   
   // Find all log files for this agent
   const logFiles = readdirSync(logDir)

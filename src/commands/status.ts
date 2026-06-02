@@ -6,9 +6,7 @@ import { readState } from '../lib/state.js';
 import { getProcessStatus } from '../lib/process.js';
 
 export function statusCommand(): void {
-  const repoRoot = getRepoRoot();
-  const config = readConfig(repoRoot);
-  const state = readState(repoRoot);
+  const state = readState();
   const agentIds = Object.keys(state.agents);
 
   if (agentIds.length === 0) {
@@ -19,7 +17,7 @@ export function statusCommand(): void {
   }
 
   console.log('');
-  const header = `${'NAME'.padEnd(20)} ${'BRANCH'.padEnd(15)} ${'PORT'.padEnd(8)} ${'STATUS'.padEnd(10)} PATH`;
+  const header = `${'NAME'.padEnd(20)} ${'PROJECT'.padEnd(15)} ${'PORT'.padEnd(8)} ${'STATUS'.padEnd(10)} PATH`;
   console.log(chalk.bold(header));
   console.log(chalk.gray('─'.repeat(80)));
 
@@ -27,10 +25,16 @@ export function statusCommand(): void {
     const agent = state.agents[id];
     let statusText: string;
 
-    // Check all configured service ports
-    const ports = config.services
-      .filter(s => s.managed !== false)
-      .map(s => agent.base_port + s.port_offset);
+    // Load project-specific config to find ports
+    let ports: number[] = [];
+    try {
+      const config = readConfig(agent.repo_root);
+      ports = config.services
+        .filter(s => s.managed !== false)
+        .map(s => agent.base_port + s.port_offset);
+    } catch {
+      // If config can't be read (e.g. repo deleted), we'll rely on PIDs
+    }
     
     const status = getProcessStatus(ports, agent.pids);
 
@@ -43,7 +47,7 @@ export function statusCommand(): void {
     }
 
     console.log(
-      `${id.padEnd(20)} ${agent.branch.padEnd(15)} ${String(agent.base_port).padEnd(8)} ${statusText.padEnd(19)} ${chalk.gray(agent.path)}`
+      `${id.padEnd(20)} ${agent.repo.padEnd(15)} ${String(agent.base_port).padEnd(8)} ${statusText.padEnd(19)} ${chalk.gray(agent.path)}`
     );
   }
 

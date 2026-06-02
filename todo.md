@@ -114,7 +114,20 @@
 
 ---
 
-## Phase 4: Background Mode + Context Injection
+## Phase 4: Global Runtime Tracking ✅ DONE
+
+- [x] Centralize state.json in `~/.grove/state.json`
+- [x] Extend AgentEntry with `repo_root` (absolute path)
+- [x] Update `grove status` to show all agents from global state
+- [x] Add `PROJECT` column to status output
+- [x] Update `stop`, `remove`, `logs`, `restart` to work from any directory
+- [x] Make `run` command work globally for existing agents
+- [x] Resilient start/creation logic when outside a git repo
+- [x] Update documentation (README.md, implementation.md)
+
+---
+
+## Phase 5: Background Mode + Context Injection
 
 ### 4A: Background AI execution
 - [ ] Create `src/lib/ai-registry.ts`:
