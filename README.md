@@ -7,14 +7,12 @@ Grove lets you work on multiple features simultaneously — each in its own isol
 ## Quick Start
 
 ```bash
-# Install
-git clone <repo-url> && cd grove
-npm install && npm run build && npm link
+# Install globally
+npm install -g grove-cli
 
 # In any git repo:
 grove init                          # detect project, create config
 grove start gallery "map feature"   # create isolated worktree
-cd ../yourrepo-gallery && npm run dev   # runs on its own portgmein
 ```
 
 ## What it does
