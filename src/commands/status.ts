@@ -5,6 +5,11 @@ import { readConfig } from '../lib/config.js';
 import { readState } from '../lib/state.js';
 import { getProcessStatus } from '../lib/process.js';
 
+function padEndVisible(str: string, len: number): string {
+  const visibleLen = str.replace(/\x1b\[[0-9;]*m/g, '').length;
+  return str + ' '.repeat(Math.max(0, len - visibleLen));
+}
+
 export function statusCommand(): void {
   const state = readState();
   const agentIds = Object.keys(state.agents);
@@ -47,7 +52,7 @@ export function statusCommand(): void {
     }
 
     console.log(
-      `${id.padEnd(20)} ${agent.repo.padEnd(15)} ${String(agent.base_port).padEnd(8)} ${statusText.padEnd(19)} ${chalk.gray(agent.path)}`
+      `${id.padEnd(20)} ${agent.repo.padEnd(15)} ${String(agent.base_port).padEnd(8)} ${padEndVisible(statusText, 10)} ${chalk.gray(agent.path)}`
     );
   }
 

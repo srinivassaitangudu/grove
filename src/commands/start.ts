@@ -1,11 +1,11 @@
 import chalk from 'chalk';
 import { execSync } from 'child_process';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import path from 'path';
 import process from 'process';
 import { getRepoRoot, getRepoName, getWorktreeDir, createWorktree } from '../lib/worktree.js';
 import { GroveConfig, readConfig } from '../lib/config.js';
-import { readState, addAgent, getAgent } from '../lib/state.js';
+import { readState, addAgent, getAgent, removeAgent } from '../lib/state.js';
 import { computePortBlock } from '../lib/ports.js';
 import { generateEnvFiles, buildServicePortMap } from '../lib/env.js';
 import { spawnBackground, getProcessStatus } from '../lib/process.js';
@@ -131,7 +131,7 @@ export function startCommand(name: string | undefined, feature: string | undefin
       printSummary(agentId, branch, basePort, worktreeDir);
       return;
     } else {
-      // Stale entry in state — clean it up silently and proceed to create
+      removeAgent(agentId);
     }
   }
 
@@ -181,14 +181,16 @@ function installDependencies(worktreeDir: string, config: GroveConfig): void {
     if (service.install_cmd) {
       const serviceDir = path.join(worktreeDir, service.dir);
       const nodeModulesPath = path.join(serviceDir, 'node_modules');
+      const sentinelPath = path.join(serviceDir, '.grove-installed');
 
-      if (existsSync(serviceDir) && !existsSync(nodeModulesPath)) {
+      if (existsSync(serviceDir) && !existsSync(nodeModulesPath) && !existsSync(sentinelPath)) {
         console.log(chalk.gray(`📦 Installing dependencies (${service.name})...`));
         try {
           execSync(service.install_cmd, {
             cwd: serviceDir,
             stdio: 'pipe',
           });
+          writeFileSync(sentinelPath, '');
           console.log(chalk.green(`✅ Dependencies installed`));
         } catch (err) {
           console.log(chalk.yellow(`⚠️  Install failed for ${service.name}. Run manually.`));

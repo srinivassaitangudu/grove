@@ -5,7 +5,7 @@ import { readConfig } from '../lib/config.js';
 import { getAgent, removeAgent } from '../lib/state.js';
 import { isPortInUse, killPort } from '../lib/process.js';
 import { removeWorktree } from '../lib/worktree.js';
-import { unlinkSync, existsSync } from 'fs';
+import { unlinkSync, existsSync, readdirSync } from 'fs';
 import path from 'path';
 
 export function removeCommand(name: string): void {
@@ -43,18 +43,17 @@ export function removeCommand(name: string): void {
     console.log(chalk.yellow(`⚠️  Failed to remove worktree via git. You may need to delete it manually.`));
   }
 
-  // Clean up log files
+  // Clean up log files (pattern: <name>-<service>.log)
   const logDir = path.join(repoRoot, '.grove', 'logs');
   if (existsSync(logDir)) {
-    const logFiles = [`${name}.log`, `${name}-install.log`];
+    const logFiles = readdirSync(logDir).filter(
+      f => f.startsWith(`${name}-`) && f.endsWith('.log')
+    );
     for (const f of logFiles) {
-      const logPath = path.join(logDir, f);
-      if (existsSync(logPath)) {
-        try {
-          unlinkSync(logPath);
-        } catch {
-          // Ignore log deletion errors
-        }
+      try {
+        unlinkSync(path.join(logDir, f));
+      } catch {
+        // Ignore log deletion errors
       }
     }
   }

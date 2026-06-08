@@ -38,31 +38,22 @@ export function logsCommand(name: string): void {
   }
 
   if (logFiles.length > 0) {
-    // For now, stream the first one found (usually frontend or primary service)
-    const logFile = logFiles[0];
-    
     console.log(chalk.gray(`📋 Streaming logs for '${name}'...`));
-    if (logFiles.length > 1) {
-      console.log(chalk.gray(`ℹ️  Found ${logFiles.length} log files. Showing: ${path.basename(logFile)}`));
-    }
-    console.log(chalk.gray(`📂 Log file: ${logFile}`));
+    console.log(chalk.gray(`📂 Log file(s): ${logFiles.map(f => path.basename(f)).join(', ')}`));
     console.log(chalk.gray('--- (Ctrl+C to stop) ---'));
     console.log('');
 
     const isWindows = os.platform() === 'win32';
-    
+
     if (isWindows) {
-      // Use PowerShell Get-Content -Wait
-      const cmd = `powershell -NoProfile -Command "Get-Content \\"${logFile}\\" -Wait -Tail 20"`;
-      spawn(cmd, {
-        stdio: 'inherit',
-        shell: true
-      });
+      // Spawn one Get-Content -Wait process per log file; output interleaves on the same terminal
+      for (const logFile of logFiles) {
+        const cmd = `powershell -NoProfile -Command "Get-Content \\"${logFile}\\" -Wait -Tail 20"`;
+        spawn(cmd, { stdio: 'inherit', shell: true });
+      }
     } else {
-      // Use tail -f
-      spawn('tail', ['-f', '-n', '20', logFile], {
-        stdio: 'inherit'
-      });
+      // tail -f accepts multiple files and labels each with ==> filename <==
+      spawn('tail', ['-f', '-n', '20', ...logFiles], { stdio: 'inherit' });
     }
   } else {
     console.log(chalk.gray(`ℹ️  No log file found for '${name}'`));
