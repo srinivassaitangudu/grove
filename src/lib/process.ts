@@ -1,4 +1,4 @@
-import { execSync, spawn } from 'child_process';
+import { execSync, execFileSync, spawn } from 'child_process';
 import { mkdirSync, openSync } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -108,21 +108,29 @@ export function spawnBackground(
   mkdirSync(path.dirname(logFile), { recursive: true });
 
   if (isWindows) {
-    // On Windows, Node.js 'detached' processes often fail to write to inherited file handles
-    // when unref() is called. Shell redirection is more reliable for background logs.
-    // We use >> to append to logs instead of > to overwrite, which is safer.
-    const cmd = `${fullCommand} >> "${logFile}" 2>&1`;
-    const child = spawn(cmd, {
-      cwd,
-      detached: true,
-      stdio: 'ignore',
-      shell: true,
-      windowsHide: true,
-      env: { ...process.env }
-    });
-    child.unref();
-    if (!child.pid) throw new Error('Failed to spawn background process');
-    return child.pid;
+    // -RedirectStandardOutput forces UseShellExecute=false in PowerShell, which spins up
+    // a foreground I/O thread that keeps powershell.exe alive until the child exits —
+    // causing grove to hang indefinitely for a long-running dev server.
+    // Without redirect flags, UseShellExecute=true: PowerShell exits immediately and
+    // cmd.exe gets its own console session (not DETACHED_PROCESS), so the >> operator
+    // propagates correctly through the full chain: cmd.exe → npm.cmd → node → vite.
+    const esc = (s: string) => s.replace(/'/g, "''");
+    const psScript = [
+      `$p = Start-Process 'cmd.exe'`,
+      `-ArgumentList '/c ${esc(fullCommand)} >> "${logFile}" 2>&1'`,
+      `-WorkingDirectory '${esc(cwd)}'`,
+      `-WindowStyle Hidden`,
+      `-PassThru`,
+      `; Write-Output $p.Id`,
+    ].join(' ');
+
+    const pidStr = execFileSync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-Command', psScript,
+    ], { encoding: 'utf-8', windowsHide: true });
+
+    const pid = parseInt(pidStr.trim(), 10);
+    if (!pid || isNaN(pid)) throw new Error('Failed to spawn background process');
+    return pid;
   } else {
     const out = openSync(logFile, 'a');
     const child = spawn(fullCommand, {
