@@ -24,6 +24,13 @@ export function worktreeExists(worktreeDir: string): boolean {
 }
 
 export function createWorktree(repoRoot: string, worktreeDir: string, branch: string): void {
+  // Clear any stale/missing worktree registrations before adding
+  try {
+    execSync(`git -C "${repoRoot}" worktree prune`, { stdio: 'pipe' });
+  } catch {
+    // non-fatal
+  }
+
   // Check if branch exists locally
   try {
     execSync(`git -C "${repoRoot}" show-ref --verify --quiet refs/heads/${branch}`, { stdio: 'pipe' });
@@ -69,6 +76,38 @@ export function removeWorktree(repoRoot: string, worktreeDir: string, branch: st
   } catch {
     // Branch might not exist or is checked out elsewhere
   }
+}
+
+export interface WorktreeChanges {
+  hasUncommitted: boolean;
+  hasUntracked: boolean;
+  hasUnpushed: boolean;
+}
+
+export function checkWorktreeChanges(worktreeDir: string, branch: string): WorktreeChanges {
+  let hasUncommitted = false;
+  let hasUntracked = false;
+  let hasUnpushed = false;
+
+  try {
+    const status = execSync(`git -C "${worktreeDir}" status --porcelain`, { encoding: 'utf-8', stdio: 'pipe' });
+    if (status.trim()) {
+      const lines = status.trim().split('\n');
+      hasUntracked = lines.some(l => l.startsWith('??'));
+      hasUncommitted = lines.some(l => !l.startsWith('??'));
+    }
+  } catch {
+    // worktree not accessible
+  }
+
+  try {
+    const unpushed = execSync(`git -C "${worktreeDir}" log "origin/${branch}..HEAD" --oneline`, { encoding: 'utf-8', stdio: 'pipe' });
+    hasUnpushed = unpushed.trim().length > 0;
+  } catch {
+    // no remote tracking branch — treat as no unpushed commits
+  }
+
+  return { hasUncommitted, hasUntracked, hasUnpushed };
 }
 
 export function listWorktrees(repoRoot: string): string[] {

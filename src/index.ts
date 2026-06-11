@@ -55,7 +55,7 @@ program
 program
   .command('remove <name>')
   .description('Stop, remove worktree, and delete branch')
-  .action((name: string) => removeCommand(name));
+  .action(async (name: string) => removeCommand(name));
 
 program
   .command('run <name> [prompt]')

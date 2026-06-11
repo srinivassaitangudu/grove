@@ -207,6 +207,7 @@ function printSummary(agentId: string, branch: string, basePort: number, worktre
   console.log(`🆔 Name    : ${agentId}`);
   console.log(`🌿 Branch  : ${branch}`);
   console.log(`🔌 Port    : ${basePort}`);
+  console.log(`🔗 Preview : http://localhost:${basePort}/`);
   console.log(`📂 Path    : ${worktreeDir}`);
   console.log(`📝 Logs    : grove logs ${agentId}`);
   console.log(chalk.gray('----------------------------------'));
