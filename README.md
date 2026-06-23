@@ -7,14 +7,12 @@ Grove lets you work on multiple features simultaneously — each in its own isol
 ## Quick Start
 
 ```bash
-# Install
-git clone <repo-url> && cd grove
-npm install && npm run build && npm link
+# Install globally
+npm install -g grove-cli
 
 # In any git repo:
 grove init                          # detect project, create config
 grove start gallery "map feature"   # create isolated worktree
-cd ../yourrepo-gallery && npm run dev   # runs on its own port
 ```
 
 ## What it does
@@ -83,10 +81,9 @@ The AI CLI is configurable:
 - Default is set in `.grove/config.json` (`"ai_command": "claude"`)
 - Override per-run with `--ai <command>`
 - Works with any CLI that accepts a prompt as an argument
-
 ### `grove status`
 
-Show all worktrees with their ports and whether processes are running.
+Show all active agents across all projects with their ports and liveness.
 
 ```bash
 grove status
@@ -94,10 +91,13 @@ grove status
 
 Output:
 ```
-NAME                 BRANCH          PORT     STATUS     PATH
+NAME                 PROJECT         PORT     STATUS     PATH
 ────────────────────────────────────────────────────────────────────────────
-gallery              gallery         60060    running    /Users/you/myapp-gallery
-dark-mode            dark-mode       62220    stopped    /Users/you/myapp-dark-mode
+gallery              myapp           60060    running    /Users/you/myapp-gallery
+dark-mode            myapp           62220    stopped    /Users/you/myapp-dark-mode
+dashboard            otherapp        61080    running    /Users/you/otherapp-dashboard
+```
+
 ────────────────────────────────────────────────────────────────────────────
 ```
 

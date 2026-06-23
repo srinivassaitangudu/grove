@@ -7,7 +7,7 @@ export interface ServicePortMap {
   [serviceName: string]: { port: number; url: string };
 }
 
-function buildServicePortMap(basePort: number, config: GroveConfig): ServicePortMap {
+export function buildServicePortMap(basePort: number, config: GroveConfig): ServicePortMap {
   const map: ServicePortMap = {};
 
   for (const service of config.services) {

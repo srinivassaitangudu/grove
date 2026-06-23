@@ -1,9 +1,47 @@
-import { execSync } from 'child_process';
+import { execSync, execFileSync, spawn } from 'child_process';
+import { mkdirSync, openSync } from 'fs';
+import path from 'path';
+import os from 'os';
+import process from 'process';
+
+const isWindows = os.platform() === 'win32';
 
 export function isPortInUse(port: number): boolean {
   try {
-    const result = execSync(`lsof -ti :${port}`, { encoding: 'utf-8', stdio: 'pipe' });
-    return result.trim().length > 0;
+    if (isWindows) {
+      const cmd = `netstat -ano | findstr LISTENING | findstr :${port}`;
+      const result = execSync(cmd, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
+      return result.trim().length > 0;
+    } else {
+      const result = execSync(`lsof -ti :${port}`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
+      return result.trim().length > 0;
+    }
+  } catch {
+    return false;
+  }
+}
+
+export function isPidRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+export function killPid(pid: number): boolean {
+  try {
+    if (isWindows) {
+      execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
+    } else {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // Already dead
+      }
+    }
+    return true;
   } catch {
     return false;
   }
@@ -11,31 +49,99 @@ export function isPortInUse(port: number): boolean {
 
 export function killPort(port: number): boolean {
   try {
-    const pids = execSync(`lsof -ti :${port}`, { encoding: 'utf-8', stdio: 'pipe' }).trim();
-    if (!pids) return false;
-
-    // SIGTERM first
-    execSync(`echo "${pids}" | xargs kill -TERM`, { stdio: 'pipe' });
-
-    // Wait briefly then check
-    execSync('sleep 1', { stdio: 'pipe' });
-
-    // Force kill if still alive
-    try {
-      const remaining = execSync(`lsof -ti :${port}`, { encoding: 'utf-8', stdio: 'pipe' }).trim();
-      if (remaining) {
-        execSync(`echo "${remaining}" | xargs kill -KILL`, { stdio: 'pipe' });
+    if (isWindows) {
+      const cmd = `netstat -ano | findstr LISTENING | findstr :${port}`;
+      const output = execSync(cmd, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      const lines = output.split('\n');
+      let killed = false;
+      for (const line of lines) {
+        const parts = line.trim().split(/\s+/);
+        const pid = parts[parts.length - 1];
+        if (pid && !isNaN(parseInt(pid))) {
+          killPid(parseInt(pid));
+          killed = true;
+        }
       }
-    } catch {
-      // Process already gone
+      return killed;
+    } else {
+      const pids = execSync(`lsof -ti :${port}`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      if (!pids) return false;
+      const pidList = pids.split('\n');
+      for (const pid of pidList) {
+        killPid(parseInt(pid));
+      }
+      return true;
     }
-
-    return true;
   } catch {
     return false;
   }
 }
 
-export function getProcessStatus(port: number): 'running' | 'stopped' {
-  return isPortInUse(port) ? 'running' : 'stopped';
+export function getProcessStatus(ports: number[], pids?: number[]): 'running' | 'stopped' {
+  // 1. Check if any of the expected ports are in use
+  // This is the most reliable check for "is the service alive?"
+  for (const port of ports) {
+    if (isPortInUse(port)) return 'running';
+  }
+
+  // 2. Check PIDs as a secondary signal
+  // On Windows, PID reuse is common, so we only trust it if we have no ports to check
+  // or if we're willing to accept a potential false positive during startup.
+  if (pids && pids.length > 0) {
+    const anyRunning = pids.some(pid => isPidRunning(pid));
+    
+    // If we have ports and NONE are in use, but a PID is "running",
+    // it's likely a stale PID/reused PID, especially on Windows.
+    // However, if we JUST started (within a few seconds), it might be valid.
+    // For now, if we have ports, we trust the port status.
+    if (ports.length === 0 && anyRunning) return 'running';
+  }
+
+  return 'stopped';
+}
+
+export function spawnBackground(
+  fullCommand: string,
+  cwd: string,
+  logFile: string
+): number {
+  mkdirSync(path.dirname(logFile), { recursive: true });
+
+  if (isWindows) {
+    // -RedirectStandardOutput forces UseShellExecute=false in PowerShell, which spins up
+    // a foreground I/O thread that keeps powershell.exe alive until the child exits —
+    // causing grove to hang indefinitely for a long-running dev server.
+    // Without redirect flags, UseShellExecute=true: PowerShell exits immediately and
+    // cmd.exe gets its own console session (not DETACHED_PROCESS), so the >> operator
+    // propagates correctly through the full chain: cmd.exe → npm.cmd → node → vite.
+    const esc = (s: string) => s.replace(/'/g, "''");
+    const psScript = [
+      `$p = Start-Process 'cmd.exe'`,
+      `-ArgumentList '/c ${esc(fullCommand)} >> "${logFile}" 2>&1'`,
+      `-WorkingDirectory '${esc(cwd)}'`,
+      `-WindowStyle Hidden`,
+      `-PassThru`,
+      `; Write-Output $p.Id`,
+    ].join(' ');
+
+    const pidStr = execFileSync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-Command', psScript,
+    ], { encoding: 'utf-8', windowsHide: true });
+
+    const pid = parseInt(pidStr.trim(), 10);
+    if (!pid || isNaN(pid)) throw new Error('Failed to spawn background process');
+    return pid;
+  } else {
+    const out = openSync(logFile, 'a');
+    const child = spawn(fullCommand, {
+      cwd,
+      detached: true,
+      stdio: ['ignore', out, out],
+      shell: true,
+      env: { ...process.env }
+    });
+    child.unref();
+    if (!child.pid) throw new Error('Failed to spawn background process');
+    return child.pid;
+  }
 }

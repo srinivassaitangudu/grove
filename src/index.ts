@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import { initCommand } from './commands/init.js';
 import { startCommand } from './commands/start.js';
 import { stopCommand, stopAllCommand } from './commands/stop.js';
+import { restartCommand } from './commands/restart.js';
 import { statusCommand } from './commands/status.js';
 import { logsCommand } from './commands/logs.js';
 import { removeCommand } from './commands/remove.js';
@@ -37,6 +38,11 @@ program
   .action(() => stopAllCommand());
 
 program
+  .command('restart <name>')
+  .description('Restart an existing agent (stop then start)')
+  .action((name: string) => restartCommand(name));
+
+program
   .command('status')
   .description('Show all agents with ports and liveness')
   .action(() => statusCommand());
@@ -49,7 +55,7 @@ program
 program
   .command('remove <name>')
   .description('Stop, remove worktree, and delete branch')
-  .action((name: string) => removeCommand(name));
+  .action(async (name: string) => removeCommand(name));
 
 program
   .command('run <name> [prompt]')

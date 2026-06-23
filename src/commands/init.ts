@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import path from 'path';
 import { getRepoRoot } from '../lib/worktree.js';
-import { configExists, writeConfig, detectProjectType, GroveConfig, Service } from '../lib/config.js';
+import { configExists, writeConfig, writeREADME, detectProjectType, GroveConfig, Service } from '../lib/config.js';
 import { ensureState } from '../lib/state.js';
 
 export function initCommand(): void {
@@ -46,11 +46,12 @@ export function initCommand(): void {
   };
 
   writeConfig(repoRoot, config);
-  ensureState(repoRoot);
+  writeREADME(repoRoot);
+  ensureState();
 
   // Update .gitignore
   const gitignorePath = path.join(repoRoot, '.gitignore');
-  const entriesToAdd = ['.grove/state.json', '.grove/logs/', '.env.local', '.env*.local'];
+  const entriesToAdd = ['.grove/logs/', '.env.local', '.env*.local'];
 
   let gitignoreContent = '';
   if (existsSync(gitignorePath)) {
@@ -68,7 +69,8 @@ export function initCommand(): void {
   console.log(chalk.green('✅ Grove initialized'));
   console.log(chalk.gray('----------------------------------'));
   console.log(`📄 Config: .grove/config.json`);
-  console.log(`📄 State:  .grove/state.json`);
+  console.log(`📖 Guide:  .grove/README.md`);
+  console.log(`📂 Logs:   .grove/logs/`);
   console.log(chalk.gray('----------------------------------'));
   console.log('');
   console.log(`👉 Next: ${chalk.cyan('grove start <name> <feature>')}`);

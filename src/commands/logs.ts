@@ -1,36 +1,62 @@
 import chalk from 'chalk';
-import { existsSync } from 'fs';
-import { execSync } from 'child_process';
+import { existsSync, readdirSync } from 'fs';
+import { spawn } from 'child_process';
 import path from 'path';
+import os from 'os';
+import process from 'process';
 import { getRepoRoot } from '../lib/worktree.js';
 import { readConfig } from '../lib/config.js';
 import { getAgent } from '../lib/state.js';
 
 export function logsCommand(name: string): void {
-  const repoRoot = getRepoRoot();
-  const config = readConfig(repoRoot);
-  const agent = getAgent(repoRoot, name);
+  const agent = getAgent(name);
 
   if (!agent) {
     console.log(chalk.red(`❌ Agent '${name}' not found`));
     process.exit(1);
   }
 
+  const repoRoot = agent.repo_root;
   const logDir = path.join(repoRoot, '.grove', 'logs');
-  const logFile = path.join(logDir, `${name}.log`);
+  
+  if (!existsSync(logDir)) {
+    console.log(chalk.gray(`ℹ️  No log directory found at ${logDir}`));
+    return;
+  }
+  
+  // Find all log files for this agent
+  const logFiles = readdirSync(logDir)
+    .filter(f => f.startsWith(`${name}-`) && f.endsWith('.log'))
+    .map(f => path.join(logDir, f));
 
-  if (existsSync(logFile)) {
-    // Stream logs in foreground
-    try {
-      execSync(`tail -f "${logFile}"`, { stdio: 'inherit' });
-    } catch {
-      // User hit Ctrl+C
+  if (logFiles.length === 0) {
+    // Check for legacy single log file
+    const legacyLog = path.join(logDir, `${name}.log`);
+    if (existsSync(legacyLog)) {
+      logFiles.push(legacyLog);
+    }
+  }
+
+  if (logFiles.length > 0) {
+    console.log(chalk.gray(`📋 Streaming logs for '${name}'...`));
+    console.log(chalk.gray(`📂 Log file(s): ${logFiles.map(f => path.basename(f)).join(', ')}`));
+    console.log(chalk.gray('--- (Ctrl+C to stop) ---'));
+    console.log('');
+
+    const isWindows = os.platform() === 'win32';
+
+    if (isWindows) {
+      // Spawn one Get-Content -Wait process per log file; output interleaves on the same terminal
+      for (const logFile of logFiles) {
+        const cmd = `powershell -NoProfile -Command "Get-Content \\"${logFile}\\" -Wait -Tail 20"`;
+        spawn(cmd, { stdio: 'inherit', shell: true });
+      }
+    } else {
+      // tail -f accepts multiple files and labels each with ==> filename <==
+      spawn('tail', ['-f', '-n', '20', ...logFiles], { stdio: 'inherit' });
     }
   } else {
     console.log(chalk.gray(`ℹ️  No log file found for '${name}'`));
-    console.log('');
-    console.log('👉 To capture logs, start the server with:');
-    const startCmd = config.services[0]?.start_cmd || 'npm run dev';
-    console.log(chalk.cyan(`   cd ${agent.path} && ${startCmd} 2>&1 | tee ${logFile}`));
+    console.log(chalk.gray(`Expected pattern: ${name}-*.log`));
   }
 }
