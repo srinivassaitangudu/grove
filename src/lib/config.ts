@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import path from 'path';
+import { CONFIG_SCHEMA_DOCS } from './schema-docs.js';
 
 export interface Service {
   name: string;
@@ -13,13 +14,31 @@ export interface Service {
   managed?: boolean;
   fixed_port?: number;
   fixed_url?: string;
+  original_port?: number;
+}
+
+export interface DiscoveredPort {
+  port: number;
+  source: string;
+  context: 'frontend' | 'backend' | 'database' | 'cache' | 'unknown';
+  confidence: 'high' | 'medium' | 'low';
+  env_var?: string;
+}
+
+export interface Profile {
+  isolate: string[];
+  share: string[];
 }
 
 export interface GroveConfig {
   version: number;
   services: Service[];
+  discovered_ports: DiscoveredPort[];
   port_range_start: number;
   port_block_size: number;
+  port_strategy: 'sequential' | 'hash';
+  port_step: number;
+  profiles: Record<string, Profile>;
   ai_command: string;
 }
 
@@ -47,81 +66,55 @@ const CONFIG_DIR = '.grove';
 const CONFIG_FILE = 'config.json';
 const README_FILE = 'README.md';
 
-const GROVE_README_CONTENT = `# Grove Project Metadata
+const GROVE_README_COMMANDS = [
+  '# Grove Project Metadata',
+  '',
+  'This folder contains Grove-specific configuration and runtime information for this project.',
+  '',
+  '## Project Structure',
+  '',
+  '- `config.json`: Project configuration (services, ports, AI commands).',
+  '- `logs/`: Runtime logs for each active agent.',
+  '- `README.md`: This reference guide.',
+  '',
+  '## Common Commands',
+  '',
+  '### Initialize Grove',
+  '```bash',
+  'grove init',
+  '```',
+  '',
+  '### Create / Start Agent',
+  '```bash',
+  'grove start <name> [feature]',
+  'grove start gallery "implement image gallery"',
+  'grove start sidebar --isolate frontend --share backend,database',
+  'grove start feature-x --profile frontend-only',
+  '```',
+  '',
+  '### Run AI Prompt',
+  '```bash',
+  'grove run <name> [prompt] [--ai <command>]',
+  '```',
+  '',
+  '### View Status / Logs / Stop / Remove',
+  '```bash',
+  'grove status',
+  'grove logs <name>',
+  'grove stop <name>',
+  'grove restart <name>',
+  'grove remove <name>',
+  '```',
+  '',
+  '## Troubleshooting',
+  '',
+  '- **Service Connectivity:** Check `.env.local` in the worktree for correct port references.',
+  '- **Port Conflicts:** Grove offsets ports by +100 per agent. Ensure ports are free.',
+  '- **Stale State:** Check `~/.grove/state.json` or run `grove status`.',
+  '',
+].join('\n');
 
-This folder contains Grove-specific configuration and runtime information for this project.
-
-## Project Structure
-
-- \`config.json\`: Project configuration (services, ports, AI commands).
-- \`logs/\`: Runtime logs for each active agent.
-- \`README.md\`: This reference guide.
-
-## Common Commands
-
-### Initialize Grove
-\`\`\`bash
-grove init
-\`\`\`
-
-### Create / Start Agent
-\`\`\`bash
-grove start <name> [feature]
-\`\`\`
-Example:
-\`\`\`bash
-grove start gallery "implement image gallery"
-\`\`\`
-Creates an isolated git worktree, assigns a dedicated port block, and launches services.
-
-### Run AI Prompt
-\`\`\`bash
-grove run <name> [prompt] [--ai <command>]
-\`\`\`
-Launches an AI coding assistant (e.g., Claude Code, Aider) directly inside the agent's worktree.
-
-**Key Features:**
-- **Auto-Start:** If the agent's services aren't running, \`grove run\` will start them automatically.
-- **Auto-Create:** If the agent doesn't exist, it will be created and started.
-- **AI Tooling:** Defaults to the \`ai_command\` in \`config.json\` (initially \`claude\`).
-- **Override:** Use \`--ai <command>\` to use a different tool (e.g., \`grove run my-agent --ai aider\`).
-
-### View Status
-\`\`\`bash
-grove status
-\`\`\`
-Lists all agents, their assigned ports, and current status (running, stopped, orphaned).
-
-### View Logs
-\`\`\`bash
-grove logs <name>
-\`\`\`
-Streams the logs for all services running under a specific agent.
-
-### Stop Agent
-\`\`\`bash
-grove stop <name>
-\`\`\`
-Kills the processes associated with the agent's port block.
-
-### Restart Agent
-\`\`\`bash
-grove restart <name>
-\`\`\`
-Stops and then starts the agent's services. Useful if the environment gets into a bad state.
-
-### Remove Agent
-\`\`\`bash
-grove remove <name>
-\`\`\`
-Stops services, deletes the git worktree directory, and removes the local branch.
-
-## Troubleshooting
-
-- **Service Connectivity:** If services can't talk to each other, ensure they use the environment variables provided by Grove (check \`.env.local\` in the worktree).
-- **Port Conflicts:** Grove uses a wide range of ports (defaulting to 54000+). Ensure these aren't blocked by your firewall.
-- **Stale State:** If \`grove status\` shows incorrect information, you may need to manually clean up orphaned processes or check \`~/.grove/state.json\`.
-`;
+const GROVE_README_CONTENT = GROVE_README_COMMANDS + '\n' + CONFIG_SCHEMA_DOCS + '\n';
 
 export function getConfigDir(repoRoot: string): string {
   return path.join(repoRoot, CONFIG_DIR);
@@ -178,9 +171,41 @@ function migrateLegacyConfig(legacy: LegacyConfig): GroveConfig {
   return {
     version: 2,
     services,
+    discovered_ports: [],
     port_range_start: legacy.port_range_start,
     port_block_size: legacy.port_block_size,
+    port_strategy: 'hash' as const,
+    port_step: 100,
+    profiles: {},
     ai_command: legacy.ai_command,
+  };
+}
+
+function isV2Config(raw: unknown): boolean {
+  const obj = raw as Record<string, unknown>;
+  return obj.version === 2 && !('port_strategy' in obj);
+}
+
+function inferOriginalPort(service: Service): number {
+  if (service.fixed_port) return service.fixed_port;
+  if (service.type === 'vite') return 5173;
+  if (service.type === 'nextjs') return 3000;
+  if (service.type === 'python') return 8000;
+  return 3000;
+}
+
+function migrateV2ToV3(v2: GroveConfig): GroveConfig {
+  return {
+    ...v2,
+    version: 3,
+    discovered_ports: v2.discovered_ports ?? [],
+    port_strategy: v2.port_strategy ?? 'hash',
+    port_step: v2.port_step ?? 100,
+    profiles: v2.profiles ?? {},
+    services: v2.services.map(s => ({
+      ...s,
+      original_port: s.original_port ?? inferOriginalPort(s),
+    })),
   };
 }
 
@@ -193,7 +218,12 @@ export function readConfig(repoRoot: string): GroveConfig {
 
   // Handle legacy (Phase 1) config format
   if (isLegacyConfig(raw)) {
-    return migrateLegacyConfig(raw);
+    return migrateV2ToV3(migrateLegacyConfig(raw));
+  }
+
+  // Handle v2 config format
+  if (isV2Config(raw)) {
+    return migrateV2ToV3(raw as GroveConfig);
   }
 
   return raw as GroveConfig;

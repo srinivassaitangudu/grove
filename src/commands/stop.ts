@@ -4,9 +4,14 @@ import { readConfig } from '../lib/config.js';
 import { readState, getAgent } from '../lib/state.js';
 import { isPortInUse, killPort, killPid } from '../lib/process.js';
 
-function getServicePorts(basePort: number, config: ReturnType<typeof readConfig>): number[] {
+function getServicePorts(basePort: number, config: ReturnType<typeof readConfig>, isolationMap?: Record<string, 'isolate' | 'share'>): number[] {
   return config.services
-    .filter(s => s.managed !== false)
+    .filter(s => {
+      if (s.managed === false) return false;
+      // Only kill isolated services; shared services belong to the main branch
+      if (isolationMap && isolationMap[s.name] === 'share') return false;
+      return true;
+    })
     .map(s => basePort + s.port_offset);
 }
 
@@ -39,7 +44,7 @@ export function stopCommand(name: string): void {
 
   // Fallback to port-based killing for robustness
   if (config) {
-    const ports = getServicePorts(agent.base_port, config);
+    const ports = getServicePorts(agent.base_port, config, agent.isolation_map);
     for (const port of ports) {
       if (isPortInUse(port)) {
         console.log(chalk.gray(`🔪 Killing residual process on port ${port}...`));

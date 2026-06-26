@@ -2,11 +2,63 @@ import chalk from 'chalk';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import path from 'path';
 import { getRepoRoot } from '../lib/worktree.js';
-import { configExists, writeConfig, writeREADME, detectProjectType, GroveConfig, Service } from '../lib/config.js';
+import { configExists, writeConfig, readConfig, writeREADME, detectProjectType, GroveConfig, Service, DiscoveredPort } from '../lib/config.js';
 import { ensureState } from '../lib/state.js';
+import { discoverPorts } from '../lib/discovery.js';
 
-export function initCommand(): void {
+function enrichServicesWithPorts(services: Service[], discovered: DiscoveredPort[]): void {
+  for (const service of services) {
+    if (service.original_port) continue;
+
+    // Try to match a discovered port to this service by context
+    const contextMap: Record<string, DiscoveredPort['context'][]> = {
+      'vite': ['frontend'],
+      'nextjs': ['frontend'],
+      'python': ['backend'],
+      'supabase': ['database'],
+      'custom': ['frontend', 'backend', 'unknown'],
+    };
+    const matchContexts = contextMap[service.type] ?? ['unknown'];
+    const match = discovered.find(p => matchContexts.includes(p.context));
+    if (match) {
+      service.original_port = match.port;
+    }
+  }
+}
+
+function printDiscoveredPorts(discovered: DiscoveredPort[]): void {
+  if (discovered.length === 0) return;
+
+  console.log('');
+  console.log(chalk.blue('📡 Discovered ports:'));
+  console.log(chalk.gray('  PORT   SOURCE                          CONTEXT      CONFIDENCE'));
+  for (const p of discovered) {
+    const port = String(p.port).padEnd(7);
+    const source = p.source.padEnd(32);
+    const context = p.context.padEnd(13);
+    const conf = p.confidence;
+    console.log(`  ${port}${source}${context}${conf}`);
+  }
+}
+
+export function initCommand(options?: { rescan?: boolean }): void {
   const repoRoot = getRepoRoot();
+
+  if (options?.rescan) {
+    if (!configExists(repoRoot)) {
+      console.log(chalk.red('❌ No grove config found. Run grove init first.'));
+      return;
+    }
+    const config = readConfig(repoRoot);
+    const discovered = discoverPorts(repoRoot);
+    config.discovered_ports = discovered;
+    enrichServicesWithPorts(config.services, discovered);
+    writeConfig(repoRoot, config);
+    printDiscoveredPorts(discovered);
+    console.log('');
+    console.log(chalk.green('✅ Port discovery updated.'));
+    return;
+  }
 
   if (configExists(repoRoot)) {
     console.log(chalk.yellow('⚠️  Grove already initialized in this repo.'));
@@ -37,11 +89,20 @@ export function initCommand(): void {
     }];
   }
 
+  // Run port discovery
+  const discovered = discoverPorts(repoRoot);
+  enrichServicesWithPorts(detected, discovered);
+  printDiscoveredPorts(discovered);
+
   const config: GroveConfig = {
-    version: 2,
+    version: 3,
     services: detected,
+    discovered_ports: discovered,
     port_range_start: 54000,
     port_block_size: 10,
+    port_strategy: 'sequential',
+    port_step: 100,
+    profiles: {},
     ai_command: 'claude',
   };
 

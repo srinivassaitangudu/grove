@@ -2,11 +2,14 @@ import { writeFileSync, mkdirSync } from 'fs';
 import path from 'path';
 import { GroveConfig, Service } from './config.js';
 import { resolveEnvVars, TemplateVars } from './templates.js';
+import { computeSequentialPort } from './ports.js';
+import { IsolationMap } from './profiles.js';
 
 export interface ServicePortMap {
   [serviceName: string]: { port: number; url: string };
 }
 
+// Legacy: hash-based port map (backward compat)
 export function buildServicePortMap(basePort: number, config: GroveConfig): ServicePortMap {
   const map: ServicePortMap = {};
 
@@ -20,7 +23,6 @@ export function buildServicePortMap(basePort: number, config: GroveConfig): Serv
         url: `http://localhost:${port}`,
       };
     } else {
-      // Unmanaged: use fixed_port or 0 if not set
       const port = service.fixed_port || 0;
       map[service.name] = {
         port,
@@ -32,32 +34,60 @@ export function buildServicePortMap(basePort: number, config: GroveConfig): Serv
   return map;
 }
 
-export function generateEnvFiles(worktreeDir: string, basePort: number, agentId: string, config: GroveConfig): void {
+// New: isolation-aware port map for sequential strategy
+export function buildIsolationPortMap(
+  config: GroveConfig,
+  isolationMap: IsolationMap,
+  agentIndex: number,
+): ServicePortMap {
+  const map: ServicePortMap = {};
+
+  for (const service of config.services) {
+    if (service.managed === false) {
+      const port = service.fixed_port || 0;
+      map[service.name] = {
+        port,
+        url: service.fixed_url || `http://localhost:${port}`,
+      };
+      continue;
+    }
+
+    const originalPort = service.original_port || (3000 + service.port_offset);
+    const mode = isolationMap[service.name] ?? 'isolate';
+
+    if (mode === 'isolate') {
+      const port = computeSequentialPort(originalPort, agentIndex, config.port_step);
+      map[service.name] = { port, url: `http://localhost:${port}` };
+    } else {
+      // Share: use original port (main branch's port)
+      map[service.name] = { port: originalPort, url: `http://localhost:${originalPort}` };
+    }
+  }
+
+  return map;
+}
+
+export function generateEnvFiles(worktreeDir: string, basePort: number, agentId: string, config: GroveConfig, serviceMap?: ServicePortMap): void {
   // Step 1: Build the full service port map (managed + fixed)
-  const serviceMap = buildServicePortMap(basePort, config);
+  const portMap = serviceMap ?? buildServicePortMap(basePort, config);
 
   // Step 2: Group env vars by their target env_file
   const envFileMap = new Map<string, Record<string, string>>();
 
   for (const service of config.services) {
-    // Skip services with no env_file (unmanaged services that don't need one)
     if (!service.env_file) continue;
 
-    const isManaged = service.managed !== false;
-    const servicePort = isManaged
-      ? basePort + service.port_offset
-      : service.fixed_port || 0;
+    const servicePort = portMap[service.name]?.port ?? 0;
 
     const vars: TemplateVars = {
       port: servicePort,
       agent_name: agentId,
       base_port: basePort,
-      services: serviceMap,
+      services: portMap,
     };
 
     const resolved = resolveEnvVars(service.env_vars, vars);
 
-    // Accumulate vars for this env file (multiple services can share one file)
     const existing = envFileMap.get(service.env_file) || {};
     envFileMap.set(service.env_file, { ...existing, ...resolved });
   }
@@ -73,7 +103,7 @@ export function generateEnvFiles(worktreeDir: string, basePort: number, agentId:
       `# Created: ${new Date().toISOString()}`,
       '',
       ...Object.entries(vars).map(([key, value]) => `${key}=${value}`),
-      '', // trailing newline
+      '',
     ];
 
     writeFileSync(fullPath, lines.join('\n'));

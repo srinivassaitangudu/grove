@@ -8,10 +8,12 @@ export interface AgentEntry {
   path: string;
   feature: string;
   repo: string;
-  repo_root: string; // Absolute path to the repository
+  repo_root: string;
   base_port: number;
   created_at: string;
   pids?: number[];
+  port_offset_index?: number;
+  isolation_map?: Record<string, 'isolate' | 'share'>;
 }
 
 export interface GroveState {

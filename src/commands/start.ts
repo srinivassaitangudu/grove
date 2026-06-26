@@ -6,26 +6,51 @@ import process from 'process';
 import { getRepoRoot, getRepoName, getWorktreeDir, createWorktree } from '../lib/worktree.js';
 import { GroveConfig, readConfig } from '../lib/config.js';
 import { readState, addAgent, getAgent, removeAgent } from '../lib/state.js';
-import { computePortBlock } from '../lib/ports.js';
-import { generateEnvFiles, buildServicePortMap } from '../lib/env.js';
-import { spawnBackground, getProcessStatus } from '../lib/process.js';
+import { computePortBlock, getNextAgentIndex } from '../lib/ports.js';
+import { generateEnvFiles, buildServicePortMap, buildIsolationPortMap, ServicePortMap } from '../lib/env.js';
+import { spawnBackground, getProcessStatus, isPortInUse } from '../lib/process.js';
 import { resolveTemplate, TemplateVars } from '../lib/templates.js';
+import { resolveIsolationMap, IsolationMap } from '../lib/profiles.js';
 
-export function launchServices(agentId: string, worktreeDir: string, config: GroveConfig, basePort: number, repoRoot: string): number[] {
+export interface StartOptions {
+  isolate?: string[];
+  share?: string[];
+  profile?: string;
+}
+
+export function launchServices(
+  agentId: string,
+  worktreeDir: string,
+  config: GroveConfig,
+  basePort: number,
+  repoRoot: string,
+  serviceMap: ServicePortMap,
+  isolationMap?: IsolationMap,
+): number[] {
   const pids: number[] = [];
   const logDir = path.join(repoRoot, '.grove', 'logs');
   mkdirSync(logDir, { recursive: true });
 
-  const serviceMap = buildServicePortMap(basePort, config);
-
   console.log(chalk.gray(`📡 Launching services...`));
   for (const service of config.services) {
     if (service.managed === false) continue;
-    
+
+    // Skip shared services — they run on the main branch
+    if (isolationMap && isolationMap[service.name] === 'share') {
+      const originalPort = service.original_port || (3000 + service.port_offset);
+      const running = isPortInUse(originalPort);
+      if (running) {
+        console.log(chalk.gray(`   ↗ ${service.name} (shared, port ${originalPort})`));
+      } else {
+        console.log(chalk.yellow(`   ⚠ ${service.name} (shared, port ${originalPort} — not running)`));
+      }
+      continue;
+    }
+
     const serviceDir = path.join(worktreeDir, service.dir);
     const serviceLogFile = path.join(logDir, `${agentId}-${service.name}.log`);
-    
-    const servicePort = basePort + service.port_offset;
+
+    const servicePort = serviceMap[service.name]?.port ?? (basePort + service.port_offset);
     const vars: TemplateVars = {
       port: servicePort,
       agent_name: agentId,
@@ -34,11 +59,11 @@ export function launchServices(agentId: string, worktreeDir: string, config: Gro
     };
 
     const resolvedCmd = resolveTemplate(service.start_cmd, vars);
-    
+
     try {
       const pid = spawnBackground(resolvedCmd, serviceDir, serviceLogFile);
       pids.push(pid);
-      console.log(chalk.gray(`   ✔ ${service.name} (pid: ${pid})`));
+      console.log(chalk.gray(`   ✔ ${service.name} (pid: ${pid}, port: ${servicePort})`));
     } catch (err) {
       console.log(chalk.red(`❌ Failed to start ${service.name}`));
     }
@@ -46,12 +71,22 @@ export function launchServices(agentId: string, worktreeDir: string, config: Gro
   return pids;
 }
 
-export function startCommand(name: string | undefined, feature: string | undefined): void {
+function getPortsForAgent(config: GroveConfig, serviceMap: ServicePortMap, isolationMap?: IsolationMap): number[] {
+  return config.services
+    .filter(s => {
+      if (s.managed === false) return false;
+      if (isolationMap && isolationMap[s.name] === 'share') return false;
+      return true;
+    })
+    .map(s => serviceMap[s.name]?.port ?? 0)
+    .filter(p => p > 0);
+}
+
+export function startCommand(name: string | undefined, feature: string | undefined, options?: StartOptions): void {
   let repoRoot: string;
   try {
     repoRoot = getRepoRoot();
   } catch (err) {
-    // If we're not in a repo, we MUST have an existing agent name to look up its repo_root
     if (!name) {
       console.log(chalk.red('❌ Not inside a git repository. Provide an agent name to restart an existing one.'));
       process.exit(1);
@@ -67,53 +102,64 @@ export function startCommand(name: string | undefined, feature: string | undefin
   const config = readConfig(repoRoot);
   const repoName = getRepoName(repoRoot);
 
-  // Auto-generate name if not provided
   const agentId = name || `agent-${Date.now().toString(36).slice(-6)}`;
 
-  // Validate name
   if (!/^[a-zA-Z0-9_-]+$/.test(agentId)) {
     console.log(chalk.red('❌ Invalid name. Use only letters, numbers, hyphens, and underscores.'));
     process.exit(1);
   }
 
-  const basePort = computePortBlock(agentId, config.port_range_start, config.port_block_size);
+  // Resolve isolation map
+  const isolationMap = resolveIsolationMap(config, {
+    isolate: options?.isolate,
+    share: options?.share,
+    profile: options?.profile,
+  });
+
+  // Compute ports based on strategy
+  let basePort: number;
+  let agentIndex: number | undefined;
+  let serviceMap: ServicePortMap;
+
+  const existingAgent = getAgent(agentId);
+
+  if (config.port_strategy === 'sequential') {
+    agentIndex = existingAgent?.port_offset_index ?? getNextAgentIndex(repoRoot);
+    serviceMap = buildIsolationPortMap(config, isolationMap, agentIndex);
+    // Use the first isolated service's port as "base port" for display
+    const firstIsolated = config.services.find(s => s.managed !== false && isolationMap[s.name] === 'isolate');
+    basePort = firstIsolated ? (serviceMap[firstIsolated.name]?.port ?? 0) : 0;
+  } else {
+    basePort = computePortBlock(agentId, config.port_range_start, config.port_block_size);
+    serviceMap = buildServicePortMap(basePort, config);
+  }
+
   const worktreeDir = getWorktreeDir(repoRoot, agentId);
   const branch = agentId;
 
-  // Check if already exists in state
-  let agent = getAgent(agentId);
+  let agent = existingAgent;
   const dirExists = existsSync(worktreeDir);
 
   if (agent || dirExists) {
     if (dirExists) {
-      // It exists on disk - check if it's already running
-      const ports = config.services
-        .filter(s => s.managed !== false)
-        .map(s => basePort + s.port_offset);
+      const ports = getPortsForAgent(config, serviceMap, isolationMap);
       const status = getProcessStatus(ports, agent?.pids);
 
       if (status === 'running') {
         console.log('');
         console.log(chalk.yellow(`⚠️  '${agentId}' is already running`));
         console.log(`📂 Path: ${worktreeDir}`);
-        console.log(`🔌 Port: ${basePort}`);
+        printPortInfo(config, serviceMap, isolationMap);
         console.log(`👉 Use ${chalk.cyan(`grove status`)} to check details.`);
         return;
       }
 
-      // If stopped, relaunch
       console.log(chalk.blue(`🔄 Relaunching: ${agentId}`));
-      
-      // Re-generate env files (config might have changed)
-      generateEnvFiles(worktreeDir, basePort, agentId, config);
 
-      // Check/Install dependencies
+      generateEnvFiles(worktreeDir, basePort, agentId, config, serviceMap);
       installDependencies(worktreeDir, config);
+      const pids = launchServices(agentId, worktreeDir, config, basePort, repoRoot, serviceMap, isolationMap);
 
-      // Launch services
-      const pids = launchServices(agentId, worktreeDir, config, basePort, repoRoot);
-      
-      // Update/Create state entry
       const now = new Date().toISOString();
       agent = {
         id: agentId,
@@ -125,10 +171,12 @@ export function startCommand(name: string | undefined, feature: string | undefin
         base_port: basePort,
         created_at: agent?.created_at || now,
         pids,
+        port_offset_index: agentIndex,
+        isolation_map: isolationMap,
       };
       addAgent(agent);
 
-      printSummary(agentId, branch, basePort, worktreeDir);
+      printSummary(agentId, branch, worktreeDir, config, serviceMap, isolationMap);
       return;
     } else {
       removeAgent(agentId);
@@ -144,21 +192,12 @@ export function startCommand(name: string | undefined, feature: string | undefin
 
   console.log('');
   console.log(chalk.blue(`🚀 Starting: ${agentId}`));
-  console.log(chalk.gray(`🔌 Assigned Port: ${basePort}`));
 
-  // Create worktree
   createWorktree(repoRoot, worktreeDir, branch);
-
-  // Generate env files
-  generateEnvFiles(worktreeDir, basePort, agentId, config);
-
-  // Install dependencies
+  generateEnvFiles(worktreeDir, basePort, agentId, config, serviceMap);
   installDependencies(worktreeDir, config);
+  const pids = launchServices(agentId, worktreeDir, config, basePort, repoRoot, serviceMap, isolationMap);
 
-  // Launch services
-  const pids = launchServices(agentId, worktreeDir, config, basePort, repoRoot);
-
-  // Save to state
   agent = {
     id: agentId,
     branch,
@@ -169,10 +208,12 @@ export function startCommand(name: string | undefined, feature: string | undefin
     base_port: basePort,
     created_at: new Date().toISOString(),
     pids,
+    port_offset_index: agentIndex,
+    isolation_map: isolationMap,
   };
   addAgent(agent);
 
-  printSummary(agentId, branch, basePort, worktreeDir);
+  printSummary(agentId, branch, worktreeDir, config, serviceMap, isolationMap);
 }
 
 function installDependencies(worktreeDir: string, config: GroveConfig): void {
@@ -200,14 +241,23 @@ function installDependencies(worktreeDir: string, config: GroveConfig): void {
   }
 }
 
-function printSummary(agentId: string, branch: string, basePort: number, worktreeDir: string): void {
+function printPortInfo(config: GroveConfig, serviceMap: ServicePortMap, isolationMap?: IsolationMap): void {
+  for (const service of config.services) {
+    if (service.managed === false) continue;
+    const port = serviceMap[service.name]?.port;
+    const mode = isolationMap?.[service.name] ?? 'isolate';
+    const modeTag = mode === 'share' ? chalk.cyan('[shared]') : chalk.green('[isolated]');
+    console.log(`🔌 ${service.name}: ${port} ${modeTag}`);
+  }
+}
+
+function printSummary(agentId: string, branch: string, worktreeDir: string, config: GroveConfig, serviceMap: ServicePortMap, isolationMap?: IsolationMap): void {
   console.log('');
   console.log(chalk.green('✅ Ready'));
   console.log(chalk.gray('----------------------------------'));
   console.log(`🆔 Name    : ${agentId}`);
   console.log(`🌿 Branch  : ${branch}`);
-  console.log(`🔌 Port    : ${basePort}`);
-  console.log(`🔗 Preview : http://localhost:${basePort}/`);
+  printPortInfo(config, serviceMap, isolationMap);
   console.log(`📂 Path    : ${worktreeDir}`);
   console.log(`📝 Logs    : grove logs ${agentId}`);
   console.log(chalk.gray('----------------------------------'));

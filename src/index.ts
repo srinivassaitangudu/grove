@@ -20,12 +20,18 @@ program
 program
   .command('init')
   .description('Initialize grove in the current repo')
-  .action(() => initCommand());
+  .option('--rescan', 'Re-run port discovery on existing config')
+  .action((options: { rescan?: boolean }) => initCommand(options));
 
 program
   .command('start [name] [feature]')
   .description('Create a new worktree with isolated ports and env')
-  .action((name?: string, feature?: string) => startCommand(name, feature));
+  .option('--isolate <services...>', 'Services to isolate (new port, new process)')
+  .option('--share <services...>', 'Services to share with main branch')
+  .option('--profile <name>', 'Use a named isolation profile')
+  .action((name?: string, feature?: string, options?: { isolate?: string[]; share?: string[]; profile?: string }) => {
+    startCommand(name, feature, options);
+  });
 
 program
   .command('stop <name>')
